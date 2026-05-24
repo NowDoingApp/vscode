@@ -2,7 +2,7 @@
   "name": "nowdoing-vscode",
   "displayName": "NowDoing",
   "description": "Notifies the NowDoing macOS app on Git branch changes so it can prompt you for a time entry, and lets you start activities from the command palette.",
-  "version": "0.4.0",
+  "version": "0.5.0",
   "publisher": "NowDoing",
   "license": "MIT",
   "icon": "images/icon.png",
@@ -69,6 +69,23 @@
           "minimum": 0,
           "maximum": 10000,
           "description": "Quiet period after a branch change before notifying NowDoing. Avoids double-fires during rebases or fast-switching."
+        },
+        "nowdoing.showCurrentActivity": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the currently tracked NowDoing activity in the status bar. Click the item to hide it."
+        },
+        "nowdoing.showElapsedTime": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show time elapsed on the current NowDoing activity in the status bar. Click the item to hide it."
+        },
+        "nowdoing.currentPollSeconds": {
+          "type": "number",
+          "default": 10,
+          "minimum": 2,
+          "maximum": 120,
+          "description": "How often to refresh the current activity from NowDoing (seconds)."
         }
       }
     },
@@ -101,6 +118,16 @@
       {
         "command": "nowdoing.openSettings",
         "title": "Open Settings",
+        "category": "NowDoing"
+      },
+      {
+        "command": "nowdoing.toggleCurrentActivity",
+        "title": "Toggle Current Activity in Status Bar",
+        "category": "NowDoing"
+      },
+      {
+        "command": "nowdoing.toggleElapsedTime",
+        "title": "Toggle Elapsed Time in Status Bar",
         "category": "NowDoing"
       }
     ]

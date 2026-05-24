@@ -27,6 +27,8 @@ listener inside the app and never sends data over the network.
   NowDoing prompt, debounced to avoid spam during rebases.
 - Start activities from the palette via `NowDoing: Start Activity` with
   type-ahead search and create-if-missing.
+- Live status-bar readout of the currently tracked activity and elapsed time
+  (each can be hidden with a click or via setting).
 - Status-bar item shows whether NowDoing is reachable; click to retry.
 - Loopback only. All traffic goes to `127.0.0.1` and is signed with HMAC
   plus timestamp and nonce.
@@ -80,14 +82,19 @@ rejects replays via timestamp and nonce checks.
 | `NowDoing: Start Activity`  | Search activities and start one (creates on demand).   |
 | `NowDoing: Show Output Log` | Reveal the extension's output channel for diagnostics. |
 | `NowDoing: Open Settings`   | Jump straight to the extension's settings.             |
+| `NowDoing: Toggle Current Activity in Status Bar` | Show/hide the activity item. |
+| `NowDoing: Toggle Elapsed Time in Status Bar`     | Show/hide the elapsed-time item. |
 
 ## Configuration
 
-| Setting               | Default | Description                                                  |
-| --------------------- | ------- | ------------------------------------------------------------ |
-| `nowdoing.enabled`    | `true`  | Master switch for branch-change notifications.               |
-| `nowdoing.port`       | `39847` | Must match the port set in NowDoing.                         |
-| `nowdoing.debounceMs` | `1500`  | Quiet window after a branch change before notifying NowDoing.|
+| Setting                       | Default | Description                                                  |
+| ----------------------------- | ------- | ------------------------------------------------------------ |
+| `nowdoing.enabled`            | `true`  | Master switch for branch-change notifications.               |
+| `nowdoing.port`               | `39847` | Must match the port set in NowDoing.                         |
+| `nowdoing.debounceMs`         | `1500`  | Quiet window after a branch change before notifying NowDoing.|
+| `nowdoing.showCurrentActivity`| `true`  | Show current activity in the status bar.                     |
+| `nowdoing.showElapsedTime`    | `true`  | Show elapsed time on the current activity in the status bar. |
+| `nowdoing.currentPollSeconds` | `10`    | How often to refresh the current activity from NowDoing.     |
 
 Token storage uses VS Code SecretStorage under the key `nowdoing.apiToken`.
 

@@ -19,6 +19,7 @@ const BRANCH_ENDPOINT_PATH = "/branch-changed";
 const HEALTHCHECK_ENDPOINT_PATH = "/healthcheck";
 const ACTIVITY_SEARCH_ENDPOINT_PATH = "/activities/search";
 const ACTIVITY_START_ENDPOINT_PATH = "/activities/start";
+const CURRENT_ENDPOINT_PATH = "/current";
 
 type ConnectionStatus =
   | "connected"
@@ -60,6 +61,18 @@ interface BranchChangeBody {
   previousBranch?: string;
 }
 
+interface CurrentActivityResult {
+  activityID: string;
+  activityName: string;
+  startedAt: string;
+  isOnBreak: boolean;
+}
+
+interface CurrentActivityResponse {
+  ok: boolean;
+  result: CurrentActivityResult | null;
+}
+
 interface ActivityStartBody {
   activityID?: string;
   name?: string;
@@ -84,8 +97,14 @@ export function deactivate(): void {
 class NowDoingExtension implements vscode.Disposable {
   private readonly output: vscode.OutputChannel;
   private readonly statusBarItem: vscode.StatusBarItem;
+  private readonly activityItem: vscode.StatusBarItem;
+  private readonly elapsedItem: vscode.StatusBarItem;
   private readonly watchedRepos = new Map<string, RepoWatcher>();
   private currentStatus: ConnectionStatus = "checking";
+  private currentActivity: CurrentActivityResult | null = null;
+  private pollHandle: NodeJS.Timeout | undefined;
+  private tickHandle: NodeJS.Timeout | undefined;
+  private configListener: vscode.Disposable | undefined;
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.output = vscode.window.createOutputChannel("NowDoing");
@@ -98,15 +117,42 @@ class NowDoingExtension implements vscode.Disposable {
     this.setStatus("checking");
     this.statusBarItem.show();
 
+    this.activityItem = vscode.window.createStatusBarItem(
+      vscode.StatusBarAlignment.Left,
+      0
+    );
+    this.activityItem.name = "NowDoing Current Activity";
+    this.activityItem.command = "nowdoing.toggleCurrentActivity";
+
+    this.elapsedItem = vscode.window.createStatusBarItem(
+      vscode.StatusBarAlignment.Left,
+      0
+    );
+    this.elapsedItem.name = "NowDoing Elapsed Time";
+    this.elapsedItem.command = "nowdoing.toggleElapsedTime";
+
     this.registerCommands();
     this.attachGitApi();
+    this.configListener = vscode.workspace.onDidChangeConfiguration((e) => {
+      if (e.affectsConfiguration(CONFIG_SECTION)) {
+        this.renderCurrentActivity();
+        this.restartPolling();
+      }
+    });
+    this.context.subscriptions.push(this.configListener);
     void this.bootstrap();
+    this.startPolling();
+    this.tickHandle = setInterval(() => this.renderCurrentActivity(), 30_000);
   }
 
   dispose(): void {
     for (const watcher of this.watchedRepos.values()) watcher.dispose();
     this.watchedRepos.clear();
+    if (this.pollHandle) clearInterval(this.pollHandle);
+    if (this.tickHandle) clearInterval(this.tickHandle);
     this.statusBarItem.dispose();
+    this.activityItem.dispose();
+    this.elapsedItem.dispose();
     this.output.dispose();
   }
 
@@ -136,8 +182,99 @@ class NowDoingExtension implements vscode.Disposable {
       }),
       vscode.commands.registerCommand("nowdoing.statusBarClick", () =>
         this.handleStatusBarClick()
+      ),
+      vscode.commands.registerCommand("nowdoing.toggleCurrentActivity", () =>
+        this.toggleSetting("showCurrentActivity")
+      ),
+      vscode.commands.registerCommand("nowdoing.toggleElapsedTime", () =>
+        this.toggleSetting("showElapsedTime")
       )
     );
+  }
+
+  private async toggleSetting(
+    key: "showCurrentActivity" | "showElapsedTime"
+  ): Promise<void> {
+    const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
+    const current = config.get<boolean>(key, true);
+    await config.update(key, !current, vscode.ConfigurationTarget.Global);
+  }
+
+  private startPolling(): void {
+    if (this.pollHandle) clearInterval(this.pollHandle);
+    const seconds = Math.max(2, readNumber("currentPollSeconds", 10));
+    this.pollHandle = setInterval(() => {
+      void this.refreshCurrentActivity();
+    }, seconds * 1000);
+    void this.refreshCurrentActivity();
+  }
+
+  private restartPolling(): void {
+    this.startPolling();
+  }
+
+  private async refreshCurrentActivity(): Promise<void> {
+    if (
+      this.currentStatus === "needs-token" ||
+      this.currentStatus === "disconnected"
+    ) {
+      this.currentActivity = null;
+      this.renderCurrentActivity();
+      return;
+    }
+    const token = await this.readStoredToken();
+    if (!token) {
+      this.currentActivity = null;
+      this.renderCurrentActivity();
+      return;
+    }
+    try {
+      const response = await this.requestNowDoing(
+        "GET",
+        CURRENT_ENDPOINT_PATH,
+        undefined,
+        token
+      );
+      if (response.status < 200 || response.status >= 300) {
+        this.currentActivity = null;
+      } else {
+        const payload = parseJson<CurrentActivityResponse>(response.body);
+        this.currentActivity = payload?.result ?? null;
+      }
+    } catch (err) {
+      this.log(`Current activity poll failed: ${formatError(err)}`);
+      this.currentActivity = null;
+    }
+    this.renderCurrentActivity();
+  }
+
+  private renderCurrentActivity(): void {
+    const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
+    const showActivity = config.get<boolean>("showCurrentActivity", true);
+    const showElapsed = config.get<boolean>("showElapsedTime", true);
+
+    if (!showActivity || !this.currentActivity) {
+      this.activityItem.hide();
+    } else {
+      const breakSuffix = this.currentActivity.isOnBreak ? " (Pause)" : "";
+      this.activityItem.text = `$(watch) ${this.currentActivity.activityName}${breakSuffix}`;
+      this.activityItem.tooltip = `NowDoing: ${this.currentActivity.activityName} — click to hide`;
+      this.activityItem.show();
+    }
+
+    if (!showElapsed || !this.currentActivity) {
+      this.elapsedItem.hide();
+    } else {
+      const startedMs = Date.parse(this.currentActivity.startedAt);
+      const elapsedMs = Number.isFinite(startedMs)
+        ? Math.max(0, Date.now() - startedMs)
+        : 0;
+      this.elapsedItem.text = `$(clock) ${formatElapsed(elapsedMs)}`;
+      this.elapsedItem.tooltip = `Elapsed since ${new Date(
+        startedMs
+      ).toLocaleTimeString()} — click to hide`;
+      this.elapsedItem.show();
+    }
   }
 
   private attachGitApi(): void {
@@ -693,4 +830,14 @@ function readNumber(key: string, fallback: number): number {
     .getConfiguration(CONFIG_SECTION)
     .get<number>(key, fallback);
   return Number.isFinite(value) ? value : fallback;
+}
+
+function formatElapsed(ms: number): string {
+  const totalMinutes = Math.floor(ms / 60_000);
+  if (totalMinutes < 1) return "<1m";
+  const hours = Math.floor(totalMinutes / 60);
+  const minutes = totalMinutes % 60;
+  if (hours === 0) return `${minutes}m`;
+  if (minutes === 0) return `${hours}h`;
+  return `${hours}h ${minutes}m`;
 }

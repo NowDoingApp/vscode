@@ -2,6 +2,12 @@
 
 History begins at 0.4.0.
 
+## 2026-05-24 — current-activity-status
+
+- Add status-bar items for current activity and elapsed time, refreshed by polling `GET /current` on the Mac app (interval set by `nowdoing.currentPollSeconds`, default 10s).
+- Add settings `nowdoing.showCurrentActivity` and `nowdoing.showElapsedTime` (both default `true`) plus matching toggle commands `NowDoing: Toggle Current Activity in Status Bar` / `… Elapsed Time …`. Clicking either status item toggles its visibility.
+- Elapsed time is rendered locally (`<1m`, `42m`, `1h 5m`) and ticked every 30s between polls so the value stays fresh without hammering the Mac app.
+
 ## 2026-05-24 — more-tests
 
 - Extract pure helpers from `extension.ts` into `src/util.ts` (`parseJson`, `errorMessageFromResponse`, `formatError`, `buildActivitySearchPath`).
