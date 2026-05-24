@@ -3,6 +3,13 @@ import * as path from "path";
 import * as vscode from "vscode";
 import { buildAuthHeaders } from "./auth";
 import type { API, GitExtension, Repository } from "./git";
+import { RepoWatcher } from "./repoWatcher";
+import {
+  buildActivitySearchPath,
+  errorMessageFromResponse,
+  formatError,
+  parseJson,
+} from "./util";
 
 const CONFIG_SECTION = "nowdoing";
 const LOOPBACK_HOST = "127.0.0.1";
@@ -169,8 +176,11 @@ class NowDoingExtension implements vscode.Disposable {
     if (this.watchedRepos.has(key)) return;
     this.watchedRepos.set(
       key,
-      new RepoWatcher(repo, (branch, previousBranch) =>
-        this.notifyBranchChange(repo, branch, previousBranch)
+      new RepoWatcher(
+        repo,
+        (branch, previousBranch) =>
+          this.notifyBranchChange(repo, branch, previousBranch),
+        () => readNumber("debounceMs", 1500)
       )
     );
     this.log(`Watching repository ${repo.rootUri.fsPath}`);
@@ -515,8 +525,11 @@ class NowDoingExtension implements vscode.Disposable {
     limit: number,
     token: string
   ): Promise<ActivitySearchItem[]> {
-    const q = encodeURIComponent(query);
-    const requestPath = `${ACTIVITY_SEARCH_ENDPOINT_PATH}?q=${q}&limit=${limit}`;
+    const requestPath = buildActivitySearchPath(
+      ACTIVITY_SEARCH_ENDPOINT_PATH,
+      query,
+      limit
+    );
     const response = await this.requestNowDoing(
       "GET",
       requestPath,
@@ -675,79 +688,9 @@ class NowDoingExtension implements vscode.Disposable {
   }
 }
 
-class RepoWatcher {
-  private lastBranch: string | undefined;
-  private debounceHandle: NodeJS.Timeout | undefined;
-  private readonly disposable: vscode.Disposable;
-
-  constructor(
-    private readonly repo: Repository,
-    private readonly onChange: (
-      branch: string,
-      previousBranch: string | undefined
-    ) => void
-  ) {
-    this.lastBranch = repo.state.HEAD?.name;
-    this.disposable = repo.state.onDidChange(() => this.onStateChange());
-  }
-
-  dispose(): void {
-    this.disposable.dispose();
-    if (this.debounceHandle) {
-      clearTimeout(this.debounceHandle);
-      this.debounceHandle = undefined;
-    }
-  }
-
-  private onStateChange(): void {
-    const next = this.repo.state.HEAD?.name;
-    if (next === this.lastBranch) {
-      return;
-    }
-    const previous = this.lastBranch;
-    this.lastBranch = next;
-    if (!next) {
-      return;
-    }
-
-    const debounce = readNumber("debounceMs", 1500);
-    if (this.debounceHandle) {
-      clearTimeout(this.debounceHandle);
-    }
-    this.debounceHandle = setTimeout(() => {
-      this.debounceHandle = undefined;
-      this.onChange(next, previous);
-    }, debounce);
-  }
-}
-
-function parseJson<T>(value: string): T | undefined {
-  if (!value.trim()) {
-    return undefined;
-  }
-  try {
-    return JSON.parse(value) as T;
-  } catch {
-    return undefined;
-  }
-}
-
-function errorMessageFromResponse(status: number, body: string): string {
-  const parsed = parseJson<{ error?: string }>(body);
-  if (parsed?.error) {
-    return `HTTP ${status}: ${parsed.error}`;
-  }
-  return `HTTP ${status}`;
-}
-
 function readNumber(key: string, fallback: number): number {
   const value = vscode.workspace
     .getConfiguration(CONFIG_SECTION)
     .get<number>(key, fallback);
   return Number.isFinite(value) ? value : fallback;
-}
-
-function formatError(err: unknown): string {
-  if (err instanceof Error) return err.message;
-  return String(err);
 }
