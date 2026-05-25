@@ -2,6 +2,7 @@ import * as http from "http";
 import * as path from "path";
 import * as vscode from "vscode";
 import { buildAuthHeaders } from "./auth";
+import { readCapability } from "./capability";
 import type { API, GitExtension, Repository } from "./git";
 import { RepoWatcher } from "./repoWatcher";
 import {
@@ -12,9 +13,6 @@ import {
 } from "./util";
 
 const CONFIG_SECTION = "nowdoing";
-const LOOPBACK_HOST = "127.0.0.1";
-const SECRET_API_TOKEN_KEY = "nowdoing.apiToken";
-const TOKEN_CONFIGURED_STATE_KEY = "nowdoing.tokenConfigured";
 const BRANCH_ENDPOINT_PATH = "/branch-changed";
 const HEALTHCHECK_ENDPOINT_PATH = "/healthcheck";
 const ACTIVITY_SEARCH_ENDPOINT_PATH = "/activities/search";
@@ -25,7 +23,7 @@ type ConnectionStatus =
   | "connected"
   | "disconnected"
   | "checking"
-  | "needs-token";
+  | "needs-app";
 
 interface ActivitySearchItem {
   id: string;
@@ -168,9 +166,6 @@ class NowDoingExtension implements vscode.Disposable {
       vscode.commands.registerCommand("nowdoing.showOutput", () => {
         this.output.show();
       }),
-      vscode.commands.registerCommand("nowdoing.setToken", () =>
-        this.promptAndStoreToken()
-      ),
       vscode.commands.registerCommand("nowdoing.startActivity", () =>
         this.runStartActivityCommand()
       ),
@@ -215,15 +210,9 @@ class NowDoingExtension implements vscode.Disposable {
 
   private async refreshCurrentActivity(): Promise<void> {
     if (
-      this.currentStatus === "needs-token" ||
+      this.currentStatus === "needs-app" ||
       this.currentStatus === "disconnected"
     ) {
-      this.currentActivity = null;
-      this.renderCurrentActivity();
-      return;
-    }
-    const token = await this.readStoredToken();
-    if (!token) {
       this.currentActivity = null;
       this.renderCurrentActivity();
       return;
@@ -231,9 +220,7 @@ class NowDoingExtension implements vscode.Disposable {
     try {
       const response = await this.requestNowDoing(
         "GET",
-        CURRENT_ENDPOINT_PATH,
-        undefined,
-        token
+        CURRENT_ENDPOINT_PATH
       );
       if (response.status < 200 || response.status >= 300) {
         this.currentActivity = null;
@@ -301,11 +288,7 @@ class NowDoingExtension implements vscode.Disposable {
   }
 
   private async bootstrap(): Promise<void> {
-    const everConfigured = this.context.globalState.get<boolean>(
-      TOKEN_CONFIGURED_STATE_KEY,
-      false
-    );
-    await this.checkConnection({ notify: everConfigured });
+    await this.checkConnection({ notify: false });
   }
 
   private attachRepo(repo: Repository): void {
@@ -376,28 +359,28 @@ class NowDoingExtension implements vscode.Disposable {
   }
 
   private async checkConnection(options: CheckConnectionOptions): Promise<void> {
-    const token = await this.readStoredToken();
-    if (!token) {
-      this.setStatus("needs-token");
+    try {
+      readCapability();
+    } catch (err) {
+      this.setStatus("needs-app");
       if (options.notify) {
         void vscode.window
           .showWarningMessage(
-            "NowDoing: Token not configured.",
-            "Set Token",
-            "Open Settings"
+            "NowDoing: App not reachable. Open the NowDoing app and enable the VSCode integration.",
+            "Retry"
           )
           .then((choice) => {
-            if (choice === "Set Token") {
-              void vscode.commands.executeCommand("nowdoing.setToken");
-            } else if (choice === "Open Settings") {
-              void vscode.commands.executeCommand("nowdoing.openSettings");
+            if (choice === "Retry") {
+              void vscode.commands.executeCommand("nowdoing.reconnect");
             }
           });
+      } else {
+        this.log(`Capability file unavailable: ${formatError(err)}`);
       }
       return;
     }
     try {
-      await this.pingHealthcheck(token);
+      await this.pingHealthcheck();
       this.setStatus("connected");
       if (options.notify) {
         void vscode.window.showInformationMessage("NowDoing: Connected.");
@@ -409,13 +392,13 @@ class NowDoingExtension implements vscode.Disposable {
           .showErrorMessage(
             `NowDoing: Connection failed: ${formatError(err)}`,
             "Retry",
-            "Open Settings"
+            "Show Output"
           )
           .then((choice) => {
             if (choice === "Retry") {
               void vscode.commands.executeCommand("nowdoing.reconnect");
-            } else if (choice === "Open Settings") {
-              void vscode.commands.executeCommand("nowdoing.openSettings");
+            } else if (choice === "Show Output") {
+              void vscode.commands.executeCommand("nowdoing.showOutput");
             }
           });
       } else {
@@ -424,12 +407,10 @@ class NowDoingExtension implements vscode.Disposable {
     }
   }
 
-  private async pingHealthcheck(token?: string): Promise<number> {
+  private async pingHealthcheck(): Promise<number> {
     const response = await this.requestNowDoing(
       "GET",
-      HEALTHCHECK_ENDPOINT_PATH,
-      undefined,
-      token
+      HEALTHCHECK_ENDPOINT_PATH
     );
     if (response.status < 200 || response.status >= 300) {
       throw new Error(errorMessageFromResponse(response.status, response.body));
@@ -470,21 +451,24 @@ class NowDoingExtension implements vscode.Disposable {
           role: "button",
         };
         break;
-      case "needs-token":
+      case "needs-app":
         this.statusBarItem.text = "$(warning) NowDoing";
         this.statusBarItem.tooltip =
-          "NowDoing: Token not configured, click to set up";
+          "NowDoing: App not reachable, click to retry";
         this.statusBarItem.backgroundColor = new vscode.ThemeColor(
           "statusBarItem.warningBackground"
         );
         this.statusBarItem.accessibilityInformation = {
-          label: "NowDoing: Token not configured, click to set up",
+          label: "NowDoing: App not reachable, click to retry",
           role: "button",
         };
         break;
     }
 
-    if (previous === "connected" && state === "disconnected") {
+    if (
+      previous === "connected" &&
+      (state === "disconnected" || state === "needs-app")
+    ) {
       void vscode.window
         .showWarningMessage(
           "NowDoing: Connection lost. Branch changes are not being sent.",
@@ -503,8 +487,10 @@ class NowDoingExtension implements vscode.Disposable {
 
   private async handleStatusBarClick(): Promise<void> {
     switch (this.currentStatus) {
-      case "needs-token":
-        await vscode.commands.executeCommand("nowdoing.setToken");
+      case "needs-app":
+      case "checking":
+      case "disconnected":
+        await vscode.commands.executeCommand("nowdoing.reconnect");
         return;
       case "connected":
         try {
@@ -515,21 +501,21 @@ class NowDoingExtension implements vscode.Disposable {
           this.setStatus("disconnected");
         }
         return;
-      case "checking":
-      case "disconnected":
-        await vscode.commands.executeCommand("nowdoing.reconnect");
-        return;
     }
   }
 
   private async runStartActivityCommand(): Promise<void> {
-    const token = await this.readStoredToken();
-    if (!token) {
+    try {
+      readCapability();
+    } catch {
       void vscode.window
-        .showWarningMessage("NowDoing: Token not configured.", "Set Token")
+        .showWarningMessage(
+          "NowDoing: App not reachable. Open the NowDoing app and enable the VSCode integration.",
+          "Retry"
+        )
         .then((choice) => {
-          if (choice === "Set Token") {
-            void vscode.commands.executeCommand("nowdoing.setToken");
+          if (choice === "Retry") {
+            void vscode.commands.executeCommand("nowdoing.reconnect");
           }
         });
       return;
@@ -549,7 +535,7 @@ class NowDoingExtension implements vscode.Disposable {
       const version = ++requestVersion;
       quickPick.busy = true;
       try {
-        const items = await this.searchActivities(query, 20, token);
+        const items = await this.searchActivities(query, 20);
         if (version !== requestVersion) return;
 
         const options: ActivityQuickPickItem[] = items.map((item) => ({
@@ -609,20 +595,19 @@ class NowDoingExtension implements vscode.Disposable {
 
       try {
         if (selected.itemType === "activity" && selected.activityID) {
-          const result = await this.startActivity(
-            { activityID: selected.activityID },
-            token
-          );
+          const result = await this.startActivity({
+            activityID: selected.activityID,
+          });
           void vscode.window.showInformationMessage(
             result.created
               ? `NowDoing: Activity created and started: ${result.activityName}`
               : `NowDoing: Activity started: ${result.activityName}`
           );
         } else if (selected.itemType === "create" && selected.createName) {
-          const result = await this.startActivity(
-            { name: selected.createName, createIfMissing: true },
-            token
-          );
+          const result = await this.startActivity({
+            name: selected.createName,
+            createIfMissing: true,
+          });
           void vscode.window.showInformationMessage(
             result.created
               ? `NowDoing: Activity created and started: ${result.activityName}`
@@ -633,13 +618,7 @@ class NowDoingExtension implements vscode.Disposable {
       } catch (err) {
         const message = `NowDoing start failed: ${formatError(err)}`;
         this.log(message);
-        void vscode.window
-          .showErrorMessage(message, "Open Settings")
-          .then((choice) => {
-            if (choice === "Open Settings") {
-              void vscode.commands.executeCommand("nowdoing.openSettings");
-            }
-          });
+        void vscode.window.showErrorMessage(message);
         quickPick.enabled = true;
         quickPick.busy = false;
       }
@@ -659,20 +638,14 @@ class NowDoingExtension implements vscode.Disposable {
 
   private async searchActivities(
     query: string,
-    limit: number,
-    token: string
+    limit: number
   ): Promise<ActivitySearchItem[]> {
     const requestPath = buildActivitySearchPath(
       ACTIVITY_SEARCH_ENDPOINT_PATH,
       query,
       limit
     );
-    const response = await this.requestNowDoing(
-      "GET",
-      requestPath,
-      undefined,
-      token
-    );
+    const response = await this.requestNowDoing("GET", requestPath);
     if (response.status < 200 || response.status >= 300) {
       throw new Error(errorMessageFromResponse(response.status, response.body));
     }
@@ -685,14 +658,12 @@ class NowDoingExtension implements vscode.Disposable {
   }
 
   private async startActivity(
-    body: ActivityStartBody,
-    token: string
+    body: ActivityStartBody
   ): Promise<ActivityStartResult> {
     const response = await this.requestNowDoing(
       "POST",
       ACTIVITY_START_ENDPOINT_PATH,
-      body,
-      token
+      body
     );
     if (response.status < 200 || response.status >= 300) {
       throw new Error(errorMessageFromResponse(response.status, response.body));
@@ -708,30 +679,22 @@ class NowDoingExtension implements vscode.Disposable {
   private async requestNowDoing(
     method: "GET" | "POST",
     requestPath: string,
-    body?: unknown,
-    tokenOverride?: string
+    body?: unknown
   ): Promise<{ status: number; body: string }> {
-    const port = readNumber("port", 39847);
-    const token = tokenOverride ?? (await this.readStoredToken());
-    if (!token) {
-      throw new Error(
-        "NowDoing token is missing. Use the 'NowDoing: Set Token' command."
-      );
-    }
+    const cap = readCapability();
 
     const payload =
       body === undefined ? undefined : Buffer.from(JSON.stringify(body), "utf8");
-    const authHeaders = buildAuthHeaders(method, requestPath, payload, token);
+    const authHeaders = buildAuthHeaders(method, requestPath, payload, cap.token);
 
     return new Promise((resolve, reject) => {
       const req = http.request(
         {
-          host: LOOPBACK_HOST,
-          port,
+          socketPath: cap.socketPath,
           path: requestPath,
           method,
           headers: {
-            "X-NowDoing-Token": token,
+            "X-NowDoing-Token": cap.token,
             "X-NowDoing-Timestamp": authHeaders.timestamp,
             "X-NowDoing-Nonce": authHeaders.nonce,
             "X-NowDoing-Signature": authHeaders.signature,
@@ -780,44 +743,6 @@ class NowDoingExtension implements vscode.Disposable {
         throw new Error(errorMessageFromResponse(response.status, response.body));
       }
     );
-  }
-
-  private async readStoredToken(): Promise<string> {
-    const token =
-      (await this.context.secrets.get(SECRET_API_TOKEN_KEY)) ?? "";
-    return token.trim();
-  }
-
-  private async storeToken(token: string): Promise<void> {
-    await this.context.secrets.store(SECRET_API_TOKEN_KEY, token);
-    await this.context.globalState.update(TOKEN_CONFIGURED_STATE_KEY, true);
-  }
-
-  private async promptAndStoreToken(): Promise<void> {
-    const existing = await this.readStoredToken();
-    const entered = await vscode.window.showInputBox({
-      title: "NowDoing Token",
-      prompt: "Paste the token from NowDoing settings",
-      value: existing,
-      password: true,
-      ignoreFocusOut: true,
-    });
-
-    if (entered === undefined) {
-      return;
-    }
-
-    const token = entered.trim();
-    if (!token) {
-      void vscode.window.showWarningMessage(
-        "NowDoing: Empty token was not saved."
-      );
-      return;
-    }
-
-    await this.storeToken(token);
-    this.setStatus("checking");
-    await this.checkConnection({ notify: true });
   }
 
   private log(message: string): void {

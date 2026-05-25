@@ -2,6 +2,15 @@
 
 History begins at 0.4.0.
 
+## 2026-05-25 — uds-capability-file
+
+- Switch transport from `127.0.0.1:<port>` to a Unix-domain socket inside the Mac app's sandbox container. The extension no longer opens any TCP connection.
+- Read the socket path and auth token from `~/Library/Containers/com.mattes.nowdoing/Data/api-endpoint.json` (mode `0600`) on every request via a new `src/capability.ts`. Token storage in VS Code SecretStorage is gone; the `nowdoing.apiToken` secret and `nowdoing.tokenConfigured` global-state flag are no longer touched.
+- Remove the `NowDoing: Set Token` command and the `nowdoing.port` setting — both obsolete now that the Mac app publishes the endpoint itself.
+- Rename the `needs-token` connection state to `needs-app` (capability file missing/unreadable). Status-bar click in that state retries the connection. Lost-connection warning also fires on `connected → needs-app`.
+- Add `src/test/capability.test.ts` covering the capability-file reader (8 tests). Test count: 42 → 50.
+- Bump to 0.6.0 (breaking: requires the Mac app build that writes the capability file).
+
 ## 2026-05-24 — current-activity-status
 
 - Add status-bar items for current activity and elapsed time, refreshed by polling `GET /current` on the Mac app (interval set by `nowdoing.currentPollSeconds`, default 10s).

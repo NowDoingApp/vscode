@@ -18,8 +18,9 @@ Notifies the [NowDoing](https://nowdoing.app) macOS app when you switch Git
 branches in VS Code, so NowDoing can pop up its time-entry prompt. You can
 also start activities directly from the command palette.
 
-Requires the NowDoing macOS app. The extension talks to a local HTTP
-listener inside the app and never sends data over the network.
+Requires the NowDoing macOS app. The extension talks to a Unix-domain
+socket inside the app's sandbox container and never sends data over the
+network.
 
 ## Features
 
@@ -30,18 +31,18 @@ listener inside the app and never sends data over the network.
 - Live status-bar readout of the currently tracked activity and elapsed time
   (each can be hidden with a click or via setting).
 - Status-bar item shows whether NowDoing is reachable; click to retry.
-- Loopback only. All traffic goes to `127.0.0.1` and is signed with HMAC
-  plus timestamp and nonce.
+- No network port. All traffic goes through a Unix-domain socket inside the
+  NowDoing sandbox container and is signed with HMAC plus timestamp and nonce.
 
 ## How it works
 
 The extension listens to the built-in `vscode.git` API for branch changes.
-After a short debounce window (default 1.5 s) it `POST`s to a local HTTP
-listener inside the NowDoing app:
+After a short debounce window (default 1.5 s) it `POST`s to a local
+Unix-domain socket inside the NowDoing app's sandbox container:
 
 ```http
-POST http://127.0.0.1:39847/branch-changed
-X-NowDoing-Token: <shared secret>
+POST /branch-changed                       (via UDS, no TCP)
+X-NowDoing-Token: <from capability file>
 X-NowDoing-Timestamp: <unix-seconds>
 X-NowDoing-Nonce: <random-hex>
 X-NowDoing-Signature: <hmac-sha256>
@@ -55,20 +56,18 @@ NowDoing opens its prompt popover with the new branch name. A separate
 `GET /healthcheck` endpoint is used for reachability checks and never
 triggers a prompt.
 
-The listener binds only to `127.0.0.1`, authenticates every request, and
-rejects replays via timestamp and nonce checks.
+When the integration is enabled, the Mac app writes a capability file
+to `~/Library/Containers/com.mattes.nowdoing/Data/api-endpoint.json`
+(mode `0600`) containing the current socket path, auth token, and PID.
+The extension reads that file on every request — there is no port to
+configure and no token to paste.
 
 ## Setup
 
-1. In the NowDoing macOS app, open *Einstellungen > Integrationen > VSCode*:
-    - Enable the integration.
-    - Generate a token and copy it.
-    - Note the configured port (default `39847`).
-2. In VS Code:
-    - Install this extension from the Marketplace.
-    - Run *NowDoing: Set Token* and paste the token.
-    - If you changed the port in NowDoing, set `nowdoing.port` in
-      *Settings > Extensions > NowDoing*.
+1. In the NowDoing macOS app, open *Einstellungen > Integrationen > VSCode*
+   and enable the integration. The app writes the capability file
+   automatically.
+2. In VS Code, install this extension from the Marketplace.
 3. Run *NowDoing: Test Connection*. The status bar should switch to
    `✓ NowDoing`.
 
@@ -76,7 +75,6 @@ rejects replays via timestamp and nonce checks.
 
 | Command                     | What it does                                           |
 | --------------------------- | ------------------------------------------------------ |
-| `NowDoing: Set Token`       | Store the shared secret in VS Code SecretStorage.      |
 | `NowDoing: Test Connection` | Ping NowDoing's `/healthcheck` endpoint.               |
 | `NowDoing: Reconnect`       | Re-check the connection and surface errors.            |
 | `NowDoing: Start Activity`  | Search activities and start one (creates on demand).   |
@@ -90,21 +88,20 @@ rejects replays via timestamp and nonce checks.
 | Setting                       | Default | Description                                                  |
 | ----------------------------- | ------- | ------------------------------------------------------------ |
 | `nowdoing.enabled`            | `true`  | Master switch for branch-change notifications.               |
-| `nowdoing.port`               | `39847` | Must match the port set in NowDoing.                         |
 | `nowdoing.debounceMs`         | `1500`  | Quiet window after a branch change before notifying NowDoing.|
 | `nowdoing.showCurrentActivity`| `true`  | Show current activity in the status bar.                     |
 | `nowdoing.showElapsedTime`    | `true`  | Show elapsed time on the current activity in the status bar. |
 | `nowdoing.currentPollSeconds` | `10`    | How often to refresh the current activity from NowDoing.     |
 
-Token storage uses VS Code SecretStorage under the key `nowdoing.apiToken`.
+The auth token lives only in the capability file the Mac app writes
+(mode `0600`, same-UID-only) — it is not stored in VS Code settings or
+SecretStorage.
 
-## Token & clock
+## Clock skew
 
-- The token is used directly as the HMAC-SHA256 key. Generate it from
-  NowDoing, don't type a passphrase.
-- Requests carry a Unix timestamp. NowDoing rejects requests with more than
-  60 seconds of drift. If you see "expired timestamp" or "signature invalid"
-  errors, check the system clock (NTP).
+Requests carry a Unix timestamp. NowDoing rejects requests with more than
+60 seconds of drift. If you see "expired timestamp" or "signature invalid"
+errors, check the system clock (NTP).
 
 ## Privacy
 
