@@ -2,7 +2,7 @@
   "name": "nowdoing-vscode",
   "displayName": "NowDoing",
   "description": "Notifies the NowDoing macOS app on Git branch changes so it can prompt you for a time entry, and lets you start activities from the command palette.",
-  "version": "0.7.0",
+  "version": "0.8.0",
   "publisher": "NowDoing",
   "license": "MIT",
   "icon": "images/icon.png",

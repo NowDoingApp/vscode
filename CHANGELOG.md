@@ -1,6 +1,13 @@
-# Change Log
+# Changelog
 
-History begins at 0.4.0.
+All notable changes to this project will be documented in this file. See [standard-version](https://github.com/conventional-changelog/standard-version) for commit guidelines.
+
+## 0.8.0 (2026-05-27)
+
+
+### Features
+
+* snapshot repository ([2eca644](https://github.com/NowDoingApp/vscode/commit/2eca6440a4eee495a7f36f3ca041c71e9b90d647))
 
 ## 0.7.0 (2026-05-27)
 
