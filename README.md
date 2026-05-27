@@ -191,4 +191,4 @@ This keeps the local changelog and the GitHub release page in sync.
 
 ## License
 
-[MIT](LICENSE) © NowDoing
+[MIT](LICENSE) © NowDoing 2026
