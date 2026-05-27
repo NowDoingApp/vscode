@@ -29,8 +29,10 @@ network.
 - Start activities from the palette via `NowDoing: Start Activity` with
   type-ahead search and create-if-missing.
 - Live status-bar readout of the currently tracked activity and elapsed time
-  (each can be hidden with a click or via setting).
-- Status-bar item shows whether NowDoing is reachable; click to retry.
+  (visibility is controlled via settings).
+- Clicking the activity item or elapsed item opens `Track New Activity`.
+- Clicking the main status-bar item opens an action menu (track, test,
+  reconnect, settings, logs).
 - No network port. All traffic goes through a Unix-domain socket inside the
   NowDoing sandbox container and is signed with HMAC plus timestamp and nonce.
 
@@ -78,10 +80,30 @@ configure and no token to paste.
 | `NowDoing: Test Connection` | Ping NowDoing's `/healthcheck` endpoint.               |
 | `NowDoing: Reconnect`       | Re-check the connection and surface errors.            |
 | `NowDoing: Start Activity`  | Search activities and start one (creates on demand).   |
+| `NowDoing: Open Action Menu`| Open the same action menu as the status bar click.      |
 | `NowDoing: Show Output Log` | Reveal the extension's output channel for diagnostics. |
 | `NowDoing: Open Settings`   | Jump straight to the extension's settings.             |
 | `NowDoing: Toggle Current Activity in Status Bar` | Show/hide the activity item. |
 | `NowDoing: Toggle Elapsed Time in Status Bar`     | Show/hide the elapsed-time item. |
+
+## Status Bar Actions
+
+Clicking the main `NowDoing` status entry opens a context menu with:
+
+- Track New Activity
+- Test Connection
+- Reconnect
+- Open Settings
+- Show Output Log
+
+Clicking either secondary status item (activity name or elapsed time)
+opens `Track New Activity`.
+
+## Delivery Reliability
+
+When branch-change delivery fails with transient conditions (`429`, `503`,
+timeout, or connection resets), notifications are queued in memory and retried
+with exponential backoff.
 
 ## Configuration
 
@@ -89,9 +111,13 @@ configure and no token to paste.
 | ----------------------------- | ------- | ------------------------------------------------------------ |
 | `nowdoing.enabled`            | `true`  | Master switch for branch-change notifications.               |
 | `nowdoing.debounceMs`         | `1500`  | Quiet window after a branch change before notifying NowDoing.|
+| `nowdoing.watchIgnorePattern` | `""`   | Optional regex. Matching target branches are ignored.        |
 | `nowdoing.showCurrentActivity`| `true`  | Show current activity in the status bar.                     |
 | `nowdoing.showElapsedTime`    | `true`  | Show elapsed time on the current activity in the status bar. |
 | `nowdoing.currentPollSeconds` | `10`    | How often to refresh the current activity from NowDoing.     |
+
+If `nowdoing.watchIgnorePattern` contains an invalid regular expression,
+the extension logs a warning and ignores the setting until fixed.
 
 The auth token lives only in the capability file the Mac app writes
 (mode `0600`, same-UID-only) — it is not stored in VS Code settings or

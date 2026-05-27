@@ -7,8 +7,11 @@ import type { API, GitExtension, Repository } from "./git";
 import { RepoWatcher } from "./repoWatcher";
 import {
   buildActivitySearchPath,
+  evaluateWatchIgnorePattern,
   errorMessageFromResponse,
   formatError,
+  getRetryDelayMs,
+  isRetryableNotifyError,
   parseJson,
 } from "./util";
 
@@ -18,6 +21,7 @@ const HEALTHCHECK_ENDPOINT_PATH = "/healthcheck";
 const ACTIVITY_SEARCH_ENDPOINT_PATH = "/activities/search";
 const ACTIVITY_START_ENDPOINT_PATH = "/activities/start";
 const CURRENT_ENDPOINT_PATH = "/current";
+const MAX_RETRY_ATTEMPTS = 4;
 
 type ConnectionStatus =
   | "connected"
@@ -77,6 +81,19 @@ interface ActivityStartBody {
   createIfMissing?: boolean;
 }
 
+interface QueuedBranchChange extends BranchChangeBody {
+  attempts: number;
+}
+
+interface StatusActionItem extends vscode.QuickPickItem {
+  action:
+    | "startActivity"
+    | "testConnection"
+    | "reconnect"
+    | "openSettings"
+    | "showOutput";
+}
+
 interface CheckConnectionOptions {
   notify: boolean;
 }
@@ -103,6 +120,9 @@ class NowDoingExtension implements vscode.Disposable {
   private pollHandle: NodeJS.Timeout | undefined;
   private tickHandle: NodeJS.Timeout | undefined;
   private configListener: vscode.Disposable | undefined;
+  private retryQueue: QueuedBranchChange[] = [];
+  private retryHandle: NodeJS.Timeout | undefined;
+  private invalidWatchIgnorePattern: string | undefined;
 
   constructor(private readonly context: vscode.ExtensionContext) {
     this.output = vscode.window.createOutputChannel("NowDoing");
@@ -120,24 +140,28 @@ class NowDoingExtension implements vscode.Disposable {
       0
     );
     this.activityItem.name = "NowDoing Current Activity";
-    this.activityItem.command = "nowdoing.toggleCurrentActivity";
+    this.activityItem.command = "nowdoing.startActivity";
 
     this.elapsedItem = vscode.window.createStatusBarItem(
       vscode.StatusBarAlignment.Left,
       0
     );
     this.elapsedItem.name = "NowDoing Elapsed Time";
-    this.elapsedItem.command = "nowdoing.toggleElapsedTime";
+    this.elapsedItem.command = "nowdoing.startActivity";
 
     this.registerCommands();
     this.attachGitApi();
     this.configListener = vscode.workspace.onDidChangeConfiguration((e) => {
       if (e.affectsConfiguration(CONFIG_SECTION)) {
+        if (e.affectsConfiguration("nowdoing.watchIgnorePattern")) {
+          this.validateWatchIgnorePattern(true);
+        }
         this.renderCurrentActivity();
         this.restartPolling();
       }
     });
     this.context.subscriptions.push(this.configListener);
+    this.validateWatchIgnorePattern(false);
     void this.bootstrap();
     this.startPolling();
     this.tickHandle = setInterval(() => this.renderCurrentActivity(), 30_000);
@@ -148,6 +172,8 @@ class NowDoingExtension implements vscode.Disposable {
     this.watchedRepos.clear();
     if (this.pollHandle) clearInterval(this.pollHandle);
     if (this.tickHandle) clearInterval(this.tickHandle);
+    if (this.retryHandle) clearTimeout(this.retryHandle);
+    this.retryQueue.length = 0;
     this.statusBarItem.dispose();
     this.activityItem.dispose();
     this.elapsedItem.dispose();
@@ -177,6 +203,9 @@ class NowDoingExtension implements vscode.Disposable {
       }),
       vscode.commands.registerCommand("nowdoing.statusBarClick", () =>
         this.handleStatusBarClick()
+      ),
+      vscode.commands.registerCommand("nowdoing.showStatusMenu", () =>
+        this.runStatusActionMenu()
       ),
       vscode.commands.registerCommand("nowdoing.toggleCurrentActivity", () =>
         this.toggleSetting("showCurrentActivity")
@@ -243,9 +272,9 @@ class NowDoingExtension implements vscode.Disposable {
     if (!showActivity || !this.currentActivity) {
       this.activityItem.hide();
     } else {
-      const breakSuffix = this.currentActivity.isOnBreak ? " (Pause)" : "";
+      const breakSuffix = this.currentActivity.isOnBreak ? " (Break)" : "";
       this.activityItem.text = `$(watch) ${this.currentActivity.activityName}${breakSuffix}`;
-      this.activityItem.tooltip = `NowDoing: ${this.currentActivity.activityName} — click to hide`;
+      this.activityItem.tooltip = `NowDoing: ${this.currentActivity.activityName} - click to track new activity`;
       this.activityItem.show();
     }
 
@@ -259,7 +288,7 @@ class NowDoingExtension implements vscode.Disposable {
       this.elapsedItem.text = `$(clock) ${formatElapsed(elapsedMs)}`;
       this.elapsedItem.tooltip = `Elapsed since ${new Date(
         startedMs
-      ).toLocaleTimeString()} — click to hide`;
+      ).toLocaleTimeString()} - click to track new activity`;
       this.elapsedItem.show();
     }
   }
@@ -321,6 +350,13 @@ class NowDoingExtension implements vscode.Disposable {
     branch: string,
     previousBranch: string | undefined
   ): Promise<void> {
+    if (this.shouldIgnoreBranch(branch)) {
+      this.log(
+        `Ignoring branch change due to nowdoing.watchIgnorePattern: ${branch}`
+      );
+      return;
+    }
+
     const config = vscode.workspace.getConfiguration(CONFIG_SECTION);
     if (config.get<boolean>("enabled", true) === false) return;
 
@@ -339,6 +375,9 @@ class NowDoingExtension implements vscode.Disposable {
       this.log(
         `Failed to notify NowDoing for ${payload.repo} -> ${branch}: ${formatError(err)}`
       );
+      if (isRetryableNotifyError(err)) {
+        this.enqueueBranchRetry(payload, err);
+      }
       this.setStatus("disconnected");
     }
   }
@@ -424,42 +463,42 @@ class NowDoingExtension implements vscode.Disposable {
     switch (state) {
       case "connected":
         this.statusBarItem.text = "$(check) NowDoing";
-        this.statusBarItem.tooltip = "NowDoing: Connected";
+        this.statusBarItem.tooltip = "NowDoing: Connected, click for actions";
         this.statusBarItem.backgroundColor = undefined;
         this.statusBarItem.accessibilityInformation = {
-          label: "NowDoing: Connected",
+          label: "NowDoing: Connected, click for actions",
           role: "button",
         };
         break;
       case "disconnected":
         this.statusBarItem.text = "$(warning) NowDoing";
-        this.statusBarItem.tooltip = "NowDoing: Disconnected, click to retry";
+        this.statusBarItem.tooltip = "NowDoing: Disconnected, click for actions";
         this.statusBarItem.backgroundColor = new vscode.ThemeColor(
           "statusBarItem.warningBackground"
         );
         this.statusBarItem.accessibilityInformation = {
-          label: "NowDoing: Disconnected, click to retry",
+          label: "NowDoing: Disconnected, click for actions",
           role: "button",
         };
         break;
       case "checking":
         this.statusBarItem.text = "$(sync~spin) NowDoing";
-        this.statusBarItem.tooltip = "NowDoing: Checking connection...";
+        this.statusBarItem.tooltip = "NowDoing: Checking connection..., click for actions";
         this.statusBarItem.backgroundColor = undefined;
         this.statusBarItem.accessibilityInformation = {
-          label: "NowDoing: Checking connection",
+          label: "NowDoing: Checking connection, click for actions",
           role: "button",
         };
         break;
       case "needs-app":
         this.statusBarItem.text = "$(warning) NowDoing";
         this.statusBarItem.tooltip =
-          "NowDoing: App not reachable, click to retry";
+          "NowDoing: App not reachable, click for actions";
         this.statusBarItem.backgroundColor = new vscode.ThemeColor(
           "statusBarItem.warningBackground"
         );
         this.statusBarItem.accessibilityInformation = {
-          label: "NowDoing: App not reachable, click to retry",
+          label: "NowDoing: App not reachable, click for actions",
           role: "button",
         };
         break;
@@ -486,21 +525,62 @@ class NowDoingExtension implements vscode.Disposable {
   }
 
   private async handleStatusBarClick(): Promise<void> {
-    switch (this.currentStatus) {
-      case "needs-app":
-      case "checking":
-      case "disconnected":
-        await vscode.commands.executeCommand("nowdoing.reconnect");
-        return;
-      case "connected":
-        try {
-          await this.pingHealthcheck();
-          this.setStatus("connected");
-        } catch (err) {
-          this.log(`Status bar re-ping failed: ${formatError(err)}`);
-          this.setStatus("disconnected");
-        }
-        return;
+    await this.runStatusActionMenu();
+  }
+
+  private async runStatusActionMenu(): Promise<void> {
+    const selected = await vscode.window.showQuickPick<StatusActionItem>(
+      [
+        {
+          label: "$(play) Track New Activity",
+          description: "Open activity picker",
+          action: "startActivity",
+        },
+        {
+          label: "$(pulse) Test Connection",
+          description: "Call /healthcheck",
+          action: "testConnection",
+        },
+        {
+          label: "$(debug-restart) Reconnect",
+          description: "Re-check app connectivity",
+          action: "reconnect",
+        },
+        {
+          label: "$(settings-gear) Open Settings",
+          description: "Open extension settings",
+          action: "openSettings",
+        },
+        {
+          label: "$(output) Show Output Log",
+          description: "Open NowDoing output channel",
+          action: "showOutput",
+        },
+      ],
+      {
+        title: "NowDoing",
+        placeHolder: "Choose an action",
+        ignoreFocusOut: true,
+      }
+    );
+
+    switch (selected?.action) {
+      case "startActivity":
+        await this.runStartActivityCommand();
+        break;
+      case "testConnection":
+        await this.runTestConnection();
+        break;
+      case "reconnect":
+        this.setStatus("checking");
+        await this.checkConnection({ notify: true });
+        break;
+      case "openSettings":
+        await vscode.commands.executeCommand("nowdoing.openSettings");
+        break;
+      case "showOutput":
+        await vscode.commands.executeCommand("nowdoing.showOutput");
+        break;
     }
   }
 
@@ -743,6 +823,126 @@ class NowDoingExtension implements vscode.Disposable {
         throw new Error(errorMessageFromResponse(response.status, response.body));
       }
     );
+  }
+
+  private shouldIgnoreBranch(branch: string): boolean {
+    const pattern = vscode.workspace
+      .getConfiguration(CONFIG_SECTION)
+      .get<string>("watchIgnorePattern", "")
+      .trim();
+
+    const result = evaluateWatchIgnorePattern(pattern, branch);
+    if (result.invalidPattern && this.invalidWatchIgnorePattern !== pattern) {
+      this.invalidWatchIgnorePattern = pattern;
+      this.log(
+        `Invalid nowdoing.watchIgnorePattern regex: ${pattern}. Ignoring this setting.`
+      );
+    }
+    if (!result.invalidPattern) {
+      this.invalidWatchIgnorePattern = undefined;
+    }
+
+    return result.isIgnored;
+  }
+
+  private validateWatchIgnorePattern(notify: boolean): void {
+    const pattern = vscode.workspace
+      .getConfiguration(CONFIG_SECTION)
+      .get<string>("watchIgnorePattern", "")
+      .trim();
+
+    if (!pattern) {
+      this.invalidWatchIgnorePattern = undefined;
+      return;
+    }
+
+    const result = evaluateWatchIgnorePattern(pattern, "validation");
+    if (!result.invalidPattern) {
+      this.invalidWatchIgnorePattern = undefined;
+      return;
+    }
+
+    if (this.invalidWatchIgnorePattern === pattern) {
+      return;
+    }
+    this.invalidWatchIgnorePattern = pattern;
+    this.log(
+      `Invalid nowdoing.watchIgnorePattern regex: ${pattern}. Ignoring this setting.`
+    );
+    if (notify) {
+      void vscode.window.showWarningMessage(
+        "NowDoing: watchIgnorePattern is not a valid regular expression and will be ignored."
+      );
+    }
+  }
+
+  private enqueueBranchRetry(body: BranchChangeBody, err: unknown): void {
+    const existing = this.retryQueue.find(
+      (item) => item.repoPath === body.repoPath && item.branch === body.branch
+    );
+    if (existing) {
+      return;
+    }
+
+    const queued: QueuedBranchChange = { ...body, attempts: 1 };
+    this.retryQueue.push(queued);
+    const delay = getRetryDelayMs(queued.attempts);
+    this.log(
+      `Queued retry in ${delay}ms for ${queued.repo} -> ${queued.branch}: ${formatError(err)}`
+    );
+    this.scheduleRetryFlush(delay);
+  }
+
+  private scheduleRetryFlush(delayMs: number): void {
+    if (this.retryHandle) {
+      return;
+    }
+    this.retryHandle = setTimeout(() => {
+      this.retryHandle = undefined;
+      void this.flushRetryQueue();
+    }, delayMs);
+  }
+
+  private async flushRetryQueue(): Promise<void> {
+    if (this.retryQueue.length === 0) {
+      return;
+    }
+
+    let nextDelay: number | undefined;
+    const pending = this.retryQueue.splice(0, this.retryQueue.length);
+
+    for (const item of pending) {
+      try {
+        const status = await this.postBranchChange(item);
+        this.log(
+          `Retried notification succeeded for ${item.repo} -> ${item.branch} (HTTP ${status})`
+        );
+        this.setStatus("connected");
+      } catch (err) {
+        const nextAttempt = item.attempts + 1;
+        if (isRetryableNotifyError(err) && nextAttempt <= MAX_RETRY_ATTEMPTS) {
+          const retryItem: QueuedBranchChange = {
+            ...item,
+            attempts: nextAttempt,
+          };
+          this.retryQueue.push(retryItem);
+          const delay = getRetryDelayMs(nextAttempt);
+          nextDelay = nextDelay === undefined ? delay : Math.min(nextDelay, delay);
+          this.log(
+            `Retry ${nextAttempt}/${MAX_RETRY_ATTEMPTS} scheduled for ${item.repo} -> ${item.branch} in ${delay}ms: ${formatError(err)}`
+          );
+        } else {
+          this.log(
+            `Dropping queued notification for ${item.repo} -> ${item.branch}: ${formatError(err)}`
+          );
+        }
+        this.setStatus("disconnected");
+      }
+    }
+
+    if (this.retryQueue.length > 0) {
+      this.scheduleRetryFlush(nextDelay ?? getRetryDelayMs(2));
+    }
   }
 
   private log(message: string): void {

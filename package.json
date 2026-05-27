@@ -2,7 +2,7 @@
   "name": "nowdoing-vscode",
   "displayName": "NowDoing",
   "description": "Notifies the NowDoing macOS app on Git branch changes so it can prompt you for a time entry, and lets you start activities from the command palette.",
-  "version": "0.6.0",
+  "version": "0.7.0",
   "publisher": "NowDoing",
   "license": "MIT",
   "icon": "images/icon.png",
@@ -63,15 +63,20 @@
           "maximum": 10000,
           "description": "Quiet period after a branch change before notifying NowDoing. Avoids double-fires during rebases or fast-switching."
         },
+        "nowdoing.watchIgnorePattern": {
+          "type": "string",
+          "default": "",
+          "description": "Optional regular expression. If the target branch matches, branch-change notifications are not sent (example: '^(main|master|develop)$')."
+        },
         "nowdoing.showCurrentActivity": {
           "type": "boolean",
           "default": true,
-          "description": "Show the currently tracked NowDoing activity in the status bar. Click the item to hide it."
+          "description": "Show the currently tracked NowDoing activity in the status bar. Clicking the item opens 'Track New Activity'."
         },
         "nowdoing.showElapsedTime": {
           "type": "boolean",
           "default": true,
-          "description": "Show time elapsed on the current NowDoing activity in the status bar. Click the item to hide it."
+          "description": "Show time elapsed on the current NowDoing activity in the status bar. Clicking the item opens 'Track New Activity'."
         },
         "nowdoing.currentPollSeconds": {
           "type": "number",
@@ -106,6 +111,11 @@
       {
         "command": "nowdoing.openSettings",
         "title": "Open Settings",
+        "category": "NowDoing"
+      },
+      {
+        "command": "nowdoing.showStatusMenu",
+        "title": "Open Action Menu",
         "category": "NowDoing"
       },
       {
