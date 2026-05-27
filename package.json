@@ -1,0 +1,157 @@
+{
+  "name": "nowdoing-vscode",
+  "displayName": "NowDoing",
+  "description": "Notifies the NowDoing macOS app on Git branch changes so it can prompt you for a time entry, and lets you start activities from the command palette.",
+  "version": "0.7.0",
+  "publisher": "NowDoing",
+  "license": "MIT",
+  "icon": "images/icon.png",
+  "author": {
+    "name": "NowDoing",
+    "email": "hello@nowdoing.app"
+  },
+  "homepage": "https://nowdoing.app",
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/NowDoingApp/vscode.git"
+  },
+  "bugs": {
+    "url": "https://github.com/NowDoingApp/vscode/issues",
+    "email": "hello@nowdoing.app"
+  },
+  "engines": {
+    "vscode": "^1.85.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "keywords": [
+    "nowdoing",
+    "time tracking",
+    "timesheet",
+    "git",
+    "branch",
+    "macos",
+    "menu bar"
+  ],
+  "galleryBanner": {
+    "color": "#1F1F23",
+    "theme": "dark"
+  },
+  "qna": "marketplace",
+  "pricing": "Free",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "main": "./dist/extension.js",
+  "extensionDependencies": [
+    "vscode.git"
+  ],
+  "contributes": {
+    "configuration": {
+      "title": "NowDoing",
+      "properties": {
+        "nowdoing.enabled": {
+          "type": "boolean",
+          "default": true,
+          "description": "Send branch-change notifications to NowDoing."
+        },
+        "nowdoing.debounceMs": {
+          "type": "number",
+          "default": 1500,
+          "minimum": 0,
+          "maximum": 10000,
+          "description": "Quiet period after a branch change before notifying NowDoing. Avoids double-fires during rebases or fast-switching."
+        },
+        "nowdoing.watchIgnorePattern": {
+          "type": "string",
+          "default": "",
+          "description": "Optional regular expression. If the target branch matches, branch-change notifications are not sent (example: '^(main|master|develop)$')."
+        },
+        "nowdoing.showCurrentActivity": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show the currently tracked NowDoing activity in the status bar. Clicking the item opens 'Track New Activity'."
+        },
+        "nowdoing.showElapsedTime": {
+          "type": "boolean",
+          "default": true,
+          "description": "Show time elapsed on the current NowDoing activity in the status bar. Clicking the item opens 'Track New Activity'."
+        },
+        "nowdoing.currentPollSeconds": {
+          "type": "number",
+          "default": 10,
+          "minimum": 2,
+          "maximum": 120,
+          "description": "How often to refresh the current activity from NowDoing (seconds)."
+        }
+      }
+    },
+    "commands": [
+      {
+        "command": "nowdoing.testConnection",
+        "title": "Test Connection",
+        "category": "NowDoing"
+      },
+      {
+        "command": "nowdoing.reconnect",
+        "title": "Reconnect",
+        "category": "NowDoing"
+      },
+      {
+        "command": "nowdoing.showOutput",
+        "title": "Show Output Log",
+        "category": "NowDoing"
+      },
+      {
+        "command": "nowdoing.startActivity",
+        "title": "Start Activity",
+        "category": "NowDoing"
+      },
+      {
+        "command": "nowdoing.openSettings",
+        "title": "Open Settings",
+        "category": "NowDoing"
+      },
+      {
+        "command": "nowdoing.showStatusMenu",
+        "title": "Open Action Menu",
+        "category": "NowDoing"
+      },
+      {
+        "command": "nowdoing.toggleCurrentActivity",
+        "title": "Toggle Current Activity in Status Bar",
+        "category": "NowDoing"
+      },
+      {
+        "command": "nowdoing.toggleElapsedTime",
+        "title": "Toggle Elapsed Time in Status Bar",
+        "category": "NowDoing"
+      }
+    ]
+  },
+  "scripts": {
+    "vscode:prepublish": "npm run typecheck && npm run bundle",
+    "typecheck": "tsc -p ./ --noEmit",
+    "bundle": "esbuild src/extension.ts --bundle --external:vscode --platform=node --target=node18 --format=cjs --outfile=dist/extension.js --sourcemap --minify",
+    "watch": "esbuild src/extension.ts --bundle --external:vscode --platform=node --target=node18 --format=cjs --outfile=dist/extension.js --sourcemap --watch",
+    "test": "tsc -p tsconfig.test.json && node --test out/test/*.test.js",
+    "release:check": "npm run typecheck && npm test && npm run bundle",
+    "release:dry-run": "standard-version --skip.commit --skip.tag --dry-run",
+    "release:prepare": "standard-version --skip.commit --skip.tag",
+    "release:patch": "npm run release:prepare -- --release-as patch",
+    "release:minor": "npm run release:prepare -- --release-as minor",
+    "release:major": "npm run release:prepare -- --release-as major",
+    "release:notes": "node scripts/release-notes-from-changelog.mjs",
+    "package": "vsce package",
+    "publish": "vsce publish"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@types/vscode": "^1.85.0",
+    "@vscode/vsce": "^3.2.0",
+    "esbuild": "^0.24.0",
+    "standard-version": "^9.5.0",
+    "typescript": "^5.4.0"
+  }
+}
