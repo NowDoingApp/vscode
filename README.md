@@ -156,6 +156,39 @@ To produce a `.vsix` for sideloading:
 npm run package
 ```
 
+## Release flow
+
+Release preparation is driven from Conventional Commits.
+
+```sh
+# inspect the next generated release without changing files
+npm run release:dry-run
+
+# prepare the next release files locally
+npm run release:patch
+# or
+npm run release:minor
+# or
+npm run release:major
+
+# validate the prepared release
+npm run release:check
+```
+
+`npm run release:patch`, `npm run release:minor`, and `npm run release:major` update `package.json`, `package-lock.json`, and prepend a generated entry to `CHANGELOG.md` without creating a commit or tag.
+
+After review, commit the prepared release change and push it to `main` only when it is actually ready to ship. The manual GitHub release workflow then:
+
+- reads the version from `package.json`
+- verifies the tag does not already exist
+- runs typecheck, tests, and bundle creation
+- packages the `.vsix`
+- reads the newest section from `CHANGELOG.md`
+- uses that changelog section as the GitHub Release notes
+- creates and pushes the matching `v<version>` tag
+
+This keeps the local changelog and the GitHub release page in sync.
+
 ## License
 
 [MIT](LICENSE) © NowDoing

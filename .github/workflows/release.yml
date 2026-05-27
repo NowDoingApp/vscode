@@ -46,6 +46,11 @@ jobs:
           echo "tag=v$VERSION" >> "$GITHUB_OUTPUT"
           echo "Building version $VERSION"
 
+      - name: Read release notes from changelog
+        run: |
+          node scripts/release-notes-from-changelog.mjs "${{ steps.version.outputs.version }}" > release-notes.md
+          test -s release-notes.md
+
       - name: Ensure tag does not already exist
         run: |
           TAG="${{ steps.version.outputs.tag }}"
@@ -81,4 +86,4 @@ jobs:
           gh release create "$TAG" \
             nowdoing-vscode-${{ steps.version.outputs.version }}.vsix \
             --title "$TAG" \
-            --notes "See CHANGELOG.md for details. The attached .vsix is uploaded to the Marketplace manually."
+            --notes-file release-notes.md

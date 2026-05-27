@@ -136,6 +136,13 @@
     "bundle": "esbuild src/extension.ts --bundle --external:vscode --platform=node --target=node18 --format=cjs --outfile=dist/extension.js --sourcemap --minify",
     "watch": "esbuild src/extension.ts --bundle --external:vscode --platform=node --target=node18 --format=cjs --outfile=dist/extension.js --sourcemap --watch",
     "test": "tsc -p tsconfig.test.json && node --test out/test/*.test.js",
+    "release:check": "npm run typecheck && npm test && npm run bundle",
+    "release:dry-run": "standard-version --skip.commit --skip.tag --dry-run",
+    "release:prepare": "standard-version --skip.commit --skip.tag",
+    "release:patch": "npm run release:prepare -- --release-as patch",
+    "release:minor": "npm run release:prepare -- --release-as minor",
+    "release:major": "npm run release:prepare -- --release-as major",
+    "release:notes": "node scripts/release-notes-from-changelog.mjs",
     "package": "vsce package",
     "publish": "vsce publish"
   },
@@ -144,6 +151,7 @@
     "@types/vscode": "^1.85.0",
     "@vscode/vsce": "^3.2.0",
     "esbuild": "^0.24.0",
+    "standard-version": "^9.5.0",
     "typescript": "^5.4.0"
   }
 }
