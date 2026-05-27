@@ -2,7 +2,14 @@
 
 History begins at 0.4.0.
 
-## 2026-05-25 — uds-capability-file
+## 0.7.0 (2026-05-27)
+
+- Improve status bar actions so clicking the main status entry opens the action menu (`nowdoing.showStatusMenu`).
+- Add branch watcher ignore support via `nowdoing.watchIgnorePattern` to suppress prompts for matching branches.
+- Improve reliability with in-memory retry/backoff for transient branch-change delivery failures.
+- Harden connection checks through authenticated `GET /healthcheck` handling.
+
+## 0.6.0 (2026-05-25)
 
 - Switch transport from `127.0.0.1:<port>` to a Unix-domain socket inside the Mac app's sandbox container. The extension no longer opens any TCP connection.
 - Read the socket path and auth token from `~/Library/Containers/com.mattes.nowdoing/Data/api-endpoint.json` (mode `0600`) on every request via a new `src/capability.ts`. Token storage in VS Code SecretStorage is gone; the `nowdoing.apiToken` secret and `nowdoing.tokenConfigured` global-state flag are no longer touched.
@@ -11,13 +18,13 @@ History begins at 0.4.0.
 - Add `src/test/capability.test.ts` covering the capability-file reader (8 tests). Test count: 42 → 50.
 - Bump to 0.6.0 (breaking: requires the Mac app build that writes the capability file).
 
-## 2026-05-24 — current-activity-status
+## 0.5.0 (2026-05-24)
 
 - Add status-bar items for current activity and elapsed time, refreshed by polling `GET /current` on the Mac app (interval set by `nowdoing.currentPollSeconds`, default 10s).
 - Add settings `nowdoing.showCurrentActivity` and `nowdoing.showElapsedTime` (both default `true`) plus matching toggle commands `NowDoing: Toggle Current Activity in Status Bar` / `… Elapsed Time …`. Clicking either status item toggles its visibility.
 - Elapsed time is rendered locally (`<1m`, `42m`, `1h 5m`) and ticked every 30s between polls so the value stays fresh without hammering the Mac app.
 
-## 2026-05-24 — more-tests
+## 0.4.0 (2026-05-24)
 
 - Extract pure helpers from `extension.ts` into `src/util.ts` (`parseJson`, `errorMessageFromResponse`, `formatError`, `buildActivitySearchPath`).
 - Extract `RepoWatcher` into `src/repoWatcher.ts` behind a narrow `WatchedRepository` interface and an injected `getDebounceMs` so its debounce/dedup behavior is unit-testable.
